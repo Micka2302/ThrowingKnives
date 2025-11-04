@@ -17,7 +17,7 @@
 			<IncludeAssets>compile; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
 		<Reference Include="CS2-GameHUDAPI">
-			<HintPath>shared/CS2-GameHUDAPI/CS2-GameHUDAPI.dll</HintPath>
+			<HintPath>shared/CS2-GameHUDAPI/shared/CS2-GameHUDAPI/CS2-GameHUDAPI.dll</HintPath>
 		</Reference>
 	</ItemGroup>
 </Project>
