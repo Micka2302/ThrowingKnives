@@ -37,7 +37,7 @@ jobs:
       - name: Copy built DLL to output folder
         run: |
           find . -type f -path "*/bin/${{ env.PROJECT_NAME }}/*.dll" -exec cp {} output/addons/counterstrikesharp/plugins/${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.dll \;
-          find . -type f -path "*/shared/${{ env.GAMEHUD_API }}/plugins/${{ env.GAMEHUD }}/*.dll" -name "${{ env.GAMEHUD }}.dll" -exec cp {} output/addons/counterstrikesharp/plugins/${{ env.GAMEHUD }}/${{ env.GAMEHUD }}.dll/ \;
+          find . -type f -path "*/shared/${{ env.GAMEHUD_API }}/plugins/${{ env.GAMEHUD }}/*.dll" -name "${{ env.GAMEHUD }}.dll" -exec cp {} output/addons/counterstrikesharp/plugins/${{ env.GAMEHUD }}/${{ env.GAMEHUD }}.dll \;
           find . -type f -path "*/bin/${{ env.PROJECT_NAME }}/*.dll" -name "${{ env.GAMEHUD_API }}.dll" -exec cp {} output/addons/counterstrikesharp/shared/${{ env.GAMEHUD_API }}/ \;
 
       - name: Publish artifact
