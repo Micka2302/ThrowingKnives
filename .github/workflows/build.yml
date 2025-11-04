@@ -10,6 +10,7 @@ on:
     - README.md
 env:
   PROJECT_NAME: ThrowingKnives
+  GAMEHUD: CS2-GameHUD
   GAMEHUD_API: CS2-GameHUDAPI
 
 jobs:
@@ -35,7 +36,7 @@ jobs:
       - name: Copy built DLL to output folder
         run: |
           find . -type f -path "*/bin/${{ env.PROJECT_NAME }}/*.dll" -exec cp {} output/addons/counterstrikesharp/plugins/${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.dll \;
-          find . -type f -path "*/shared/${{ env.GAMEHUD_API }}/plugins/${{ env.GAMEHUD_API }}/*.dll" -name "${{ env.GAMEHUD_API }}.dll" -exec cp {} output/addons/counterstrikesharp/plugins/${{ env.GAMEHUD_API }}/${{ env.GAMEHUD_API }}.dll/ \;
+          find . -type f -path "*/shared/${{ env.GAMEHUD_API }}/plugins/${{ env.GAMEHUD }}/*.dll" -name "${{ env.GAMEHUD }}.dll" -exec cp {} output/addons/counterstrikesharp/plugins/${{ env.GAMEHUD }}/${{ env.GAMEHUD }}.dll/ \;
           find . -type f -path "*/bin/${{ env.PROJECT_NAME }}/*.dll" -name "${{ env.GAMEHUD_API }}.dll" -exec cp {} output/addons/counterstrikesharp/shared/${{ env.GAMEHUD_API }}/ \;
 
       - name: Publish artifact
