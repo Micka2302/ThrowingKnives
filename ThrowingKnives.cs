@@ -7,6 +7,7 @@ using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Entities.Constants;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Memory.DynamicFunctions;
+using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.Text.Json.Serialization;
@@ -42,6 +43,12 @@ public class PluginConfig : BasePluginConfig
     [JsonPropertyName("KnifeCooldown")]
     public float KnifeCooldown { get; set; } = 3.0f;
 
+    [JsonPropertyName("KnifeFlags")]
+    public List<string> KnifeFlags { get; set; } = [];
+
+    [JsonPropertyName("GameHUDChannel")]
+    public int GameHUDChannel { get; set; } = 1;
+
     [JsonPropertyName("ConfigVersion")]
     public override int Version { get; set; } = 2;
 }
@@ -60,9 +67,11 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     private static TimeSpan _playerCooldownDuration = TimeSpan.FromSeconds(3);
     private readonly ConcurrentDictionary<int, DateTime> _playerCooldowns = new();
     private CSTimer?[] _playerCooldownTimers = new CSTimer[65];
-    private const int HUD_CHANNEL = 1;
     public static IGameHUDAPI? _hudapi;
 
+
+    // Used for tracking player permission for throwing knives
+    private Dictionary<int, bool> _playerHasPerms = new();
 
     // Used for tracking attacker active weapon when knife was thrown
     private Dictionary<string, uint?> _knivesThrown = new();
@@ -134,6 +143,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
             foreach (var player in Utilities.GetPlayers().Where(p => !p.IsBot && !p.IsHLTV))
             {
                 _knivesAvailable[player.Slot] = Config.KnifeAmount;
+                _playerHasPerms[player.Slot] = PlayerHasPerm(player, Config.KnifeFlags);
             }
         }
     }
@@ -156,6 +166,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         catch (Exception ex)
         {
             _hudapi = null;
+            Config.GameHUDChannel = -1;
             Logger.LogWarning($"GameHUD API loading failed. Cooldown HUD will not work. {ex.Message}");
         }
 
@@ -179,7 +190,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
         var thrownKnife = damageInfo.Inflictor.Value;
 
-        if (thrownKnife == null || !thrownKnife.IsValid || thrownKnife.DesignerName.Equals("player"))
+        if (thrownKnife == null || !thrownKnife.IsValid || !thrownKnife.DesignerName.Equals("prop_physics_override"))
             return HookResult.Continue;
 
         if (thrownKnife.Entity == null || !thrownKnife.Entity.Name.StartsWith("tknife_") ||
@@ -238,11 +249,23 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     {
         CBasePlayerWeapon? activeWeapon;
         if (pressed.HasFlag(PlayerButtons.Attack) &&
-        (activeWeapon = player.PlayerPawn.Value?.WeaponServices?.ActiveWeapon.Value) != null && activeWeapon.IsValid &&
-            (activeWeapon.DesignerName.Contains("knife") || activeWeapon.DesignerName.Contains("bayonet")))
+            _playerHasPerms.ContainsKey(player.Slot) && _playerHasPerms[player.Slot] &&
+                (activeWeapon = player.PlayerPawn.Value?.WeaponServices?.ActiveWeapon.Value) != null && activeWeapon.IsValid &&
+                    (activeWeapon.DesignerName.Contains("knife") || activeWeapon.DesignerName.Contains("bayonet")))
         {
             ThrowKnife(player, activeWeapon);
         }
+    }
+
+    [GameEventHandler]
+    public HookResult OnPlayerConnect(EventPlayerConnectFull @event, GameEventInfo @info)
+    {
+        var player = @event.Userid;
+
+        if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) return HookResult.Continue;
+
+        _playerHasPerms[player.Slot] = PlayerHasPerm(player, Config.KnifeFlags);
+        return HookResult.Continue;
     }
 
     [GameEventHandler]
@@ -262,7 +285,8 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
                 player.Connected != PlayerConnectedState.PlayerConnected ||
                 player.IsBot || player.IsHLTV) continue;
 
-            _hudapi?.Native_GameHUD_Remove(player, HUD_CHANNEL);
+            if (Config.GameHUDChannel != -1)
+                _hudapi?.Native_GameHUD_Remove(player, (byte)Config.GameHUDChannel);
 
             _knivesAvailable[player.Slot] = Config.KnifeAmount;
         }
@@ -354,7 +378,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         _playerCooldowns[slot] = DateTime.UtcNow;
         _playerCooldowns.TryGetValue(slot, out lastTime);
 
-        if (_hudapi != null)
+        if (_hudapi != null && Config.GameHUDChannel != -1)
         {
             _playerCooldownTimers[slot] = AddTimer(0.1f, () =>
             {
@@ -367,7 +391,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
                 if (cdLeft <= 0)
                 {
-                    _hudapi.Native_GameHUD_Remove(player, HUD_CHANNEL);
+                    _hudapi.Native_GameHUD_Remove(player, (byte)Config.GameHUDChannel);
                     _playerCooldownTimers[slot]?.Kill();
                     return;
                 }
@@ -377,8 +401,8 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
                 const float fZEntity = 7.0f;
                 const int iSize = 54;
 
-                _hudapi.Native_GameHUD_SetParams(player, HUD_CHANNEL, fXEntity, fYEntity, fZEntity, Color.Cyan, iSize, "Verdana", iSize / 7000.0f);
-                _hudapi.Native_GameHUD_Show(player, HUD_CHANNEL, $"Cooldown left: {cdLeft:F2}", 0.2f);
+                _hudapi.Native_GameHUD_SetParams(player, (byte)Config.GameHUDChannel, fXEntity, fYEntity, fZEntity, Color.Cyan, iSize, "Verdana", iSize / 7000.0f);
+                _hudapi.Native_GameHUD_Show(player, (byte)Config.GameHUDChannel, $"Cooldown left: {cdLeft:F2}", 0.2f);
             }, TimerFlags.REPEAT);
         }
 
@@ -418,5 +442,27 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         float dz = vector2.Z - vector1.Z;
 
         return (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    public static bool PlayerHasPerm(CCSPlayerController player, List<string> flags)
+    {
+        bool access = false;
+
+        if (flags.Count() == 0)
+        {
+            access = true;
+        }
+        else
+        {
+            foreach (var flag in flags)
+            {
+                if (string.IsNullOrWhiteSpace(flag) || AdminManager.PlayerHasPermissions(player, flag) || AdminManager.PlayerInGroup(player, flag))
+                {
+                    access = true;
+                    break;
+                }
+            }
+        }
+        return access;
     }
 }
