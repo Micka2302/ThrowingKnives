@@ -8,15 +8,12 @@ using CounterStrikeSharp.API.Modules.Entities.Constants;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Memory.DynamicFunctions;
 using CounterStrikeSharp.API.Modules.Admin;
-using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using System.Numerics;
 using System.Drawing;
 using System.Collections.Concurrent;
-
-using CS2_GameHUDAPI;
 
 namespace ThrowingKnives;
 
@@ -46,20 +43,17 @@ public class PluginConfig : BasePluginConfig
     [JsonPropertyName("KnifeFlags")]
     public List<string> KnifeFlags { get; set; } = [];
 
-    [JsonPropertyName("GameHUDChannel")]
-    public int GameHUDChannel { get; set; } = 1;
-
     [JsonPropertyName("ConfigVersion")]
-    public override int Version { get; set; } = 2;
+    public override int Version { get; set; } = 3;
 }
 
-[MinimumApiVersion(342)]
+[MinimumApiVersion(352)]
 public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 {
     public override string ModuleName => "Throwing Knives";
     public override string ModuleDescription => "Throwing Knives plugin for CS2";
     public override string ModuleAuthor => "Cruze";
-    public override string ModuleVersion => "1.0.2";
+    public override string ModuleVersion => "1.0.3";
 
     public required PluginConfig Config { get; set; } = new();
 
@@ -67,8 +61,6 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     private static TimeSpan _playerCooldownDuration = TimeSpan.FromSeconds(3);
     private readonly ConcurrentDictionary<int, DateTime> _playerCooldowns = new();
     private CSTimer?[] _playerCooldownTimers = new CSTimer[65];
-    public static IGameHUDAPI? _hudapi;
-
 
     // Used for tracking player permission for throwing knives
     private Dictionary<int, bool> _playerHasPerms = new();
@@ -154,22 +146,6 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         RemoveListener<Listeners.OnMapStart>(OnMapStart);
 
         VirtualFunctions.CBaseEntity_TakeDamageOldFunc.Unhook(OnTakeDamage, HookMode.Pre);
-    }
-
-    public override void OnAllPluginsLoaded(bool hotReload)
-    {
-        try
-        {
-            PluginCapability<IGameHUDAPI> CapabilityCP = new("gamehud:api");
-            _hudapi = IGameHUDAPI.Capability.Get();
-        }
-        catch (Exception ex)
-        {
-            _hudapi = null;
-            Config.GameHUDChannel = -1;
-            Logger.LogWarning($"GameHUD API loading failed. Cooldown HUD will not work. {ex.Message}");
-        }
-
     }
 
     private HookResult OnTakeDamage(DynamicHook hook)
@@ -285,9 +261,6 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
                 player.Connected != PlayerConnectedState.PlayerConnected ||
                 player.IsBot || player.IsHLTV) continue;
 
-            if (Config.GameHUDChannel != -1)
-                _hudapi?.Native_GameHUD_Remove(player, (byte)Config.GameHUDChannel);
-
             _knivesAvailable[player.Slot] = Config.KnifeAmount;
         }
         return HookResult.Continue;
@@ -378,33 +351,27 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         _playerCooldowns[slot] = DateTime.UtcNow;
         _playerCooldowns.TryGetValue(slot, out lastTime);
 
-        if (_hudapi != null && Config.GameHUDChannel != -1)
+        _playerCooldownTimers[slot] = AddTimer(0.2f, () =>
         {
-            _playerCooldownTimers[slot] = AddTimer(0.1f, () =>
+            if (player == null || !player.IsValid || player.Connected != PlayerConnectedState.PlayerConnected)
             {
-                if (player == null || !player.IsValid || player.Connected != PlayerConnectedState.PlayerConnected)
-                {
-                    _playerCooldownTimers[slot]?.Kill();
-                    return;
-                }
-                float cdLeft = Config.KnifeCooldown - (float)(DateTime.UtcNow - lastTime).TotalSeconds;
+                _playerCooldownTimers[slot]?.Kill();
+                return;
+            }
 
-                if (cdLeft <= 0)
-                {
-                    _hudapi.Native_GameHUD_Remove(player, (byte)Config.GameHUDChannel);
-                    _playerCooldownTimers[slot]?.Kill();
-                    return;
-                }
+            float cdLeft = Config.KnifeCooldown - (float)(DateTime.UtcNow - lastTime).TotalSeconds;
+            int knivesLeft = Config.KnifeAmount == -1 ? -1 : (_knivesAvailable.TryGetValue(slot, out var value) ? value : 0);
+            string knivesText = Config.KnifeAmount == -1 ? "∞" : knivesLeft.ToString();
 
-                const float fXEntity = -2.3f;
-                const float fYEntity = -3.8f;
-                const float fZEntity = 7.0f;
-                const int iSize = 54;
+            if (cdLeft <= 0)
+            {
+                player.PrintToCenterAlert($"Couteau prêt | Restants: {knivesText}");
+                _playerCooldownTimers[slot]?.Kill();
+                return;
+            }
 
-                _hudapi.Native_GameHUD_SetParams(player, (byte)Config.GameHUDChannel, fXEntity, fYEntity, fZEntity, Color.Cyan, iSize, "Verdana", iSize / 7000.0f);
-                _hudapi.Native_GameHUD_Show(player, (byte)Config.GameHUDChannel, $"Cooldown left: {cdLeft:F2}", 0.2f);
-            }, TimerFlags.REPEAT);
-        }
+            player.PrintToCenterAlert($"Recharge: {cdLeft:F1}s | Restants: {knivesText}");
+        }, TimerFlags.REPEAT);
 
         if (Config.KnifeAmount == -1) return;
 
