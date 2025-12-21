@@ -184,6 +184,12 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         if (attacker == null || !attacker.IsValid)
             return HookResult.Continue;
 
+        if (attacker.TeamNum == pawn.TeamNum)
+        {
+            thrownKnife.AcceptInput("Kill");
+            return HookResult.Stop;
+        }
+
         damageInfo.Inflictor.Raw = attacker.EntityHandle;
         damageInfo.Attacker.Raw = attacker.EntityHandle;
         damageInfo.Ability.Raw = (uint)activeWeapon;
