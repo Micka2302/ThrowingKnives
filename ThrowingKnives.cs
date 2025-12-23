@@ -1,19 +1,24 @@
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Memory;
 using CounterStrikeSharp.API.Core.Attributes;
 using CSTimer = CounterStrikeSharp.API.Modules.Timers.Timer;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Entities.Constants;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
-using CounterStrikeSharp.API.Modules.Memory.DynamicFunctions;
 using CounterStrikeSharp.API.Modules.Admin;
+using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Utils;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.IO;
+using System.Reflection;
 using Microsoft.Extensions.Logging;
 using System.Numerics;
 using System.Drawing;
 using System.Collections.Concurrent;
+using KitsuneMenu;
+using KitsuneMenu.Core;
+using KitsuneMenu.Core.Interfaces;
 
 namespace ThrowingKnives;
 
@@ -27,6 +32,19 @@ public class PluginConfig : BasePluginConfig
 
     [JsonPropertyName("KnifeDamage")]
     public float KnifeDamage { get; set; } = 45.0f;
+
+    [JsonPropertyName("KnifeHeadshotDamage")]
+    public float KnifeHeadshotDamage { get; set; } = 130.0f;
+
+    [JsonPropertyName("KnifeGravity")]
+    public float KnifeGravity { get; set; } = 1.0f;
+
+    [JsonPropertyName("KnifeAmountsByFlag")]
+    [JsonConverter(typeof(StringIntDictionaryConverter))]
+    public Dictionary<string, int> KnifeAmountsByFlag { get; set; } = new();
+
+    [JsonPropertyName("DebugHits")]
+    public bool DebugHits { get; set; } = false;
 
     [JsonPropertyName("KnifeElasticity")]
     public float KnifeElasticity { get; set; } = 0.2f;
@@ -44,7 +62,7 @@ public class PluginConfig : BasePluginConfig
     public List<string> KnifeFlags { get; set; } = [];
 
     [JsonPropertyName("ConfigVersion")]
-    public override int Version { get; set; } = 3;
+    public override int Version { get; set; } = 6;
 }
 
 [MinimumApiVersion(352)]
@@ -53,7 +71,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     public override string ModuleName => "Throwing Knives";
     public override string ModuleDescription => "Throwing Knives plugin for CS2";
     public override string ModuleAuthor => "Cruze";
-    public override string ModuleVersion => "1.0.3";
+    public override string ModuleVersion => "1.0.6";
 
     public required PluginConfig Config { get; set; } = new();
 
@@ -73,6 +91,16 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
     // Used for trails
     private Dictionary<uint, Vector3> _knivesOldPos = new();
+    private readonly Dictionary<int, Color> _playerTrailColors = new();
+    private static readonly (string Name, Color Color)[] TrailPalette =
+    {
+        ("Bleu", Color.CornflowerBlue),
+        ("Rouge", Color.IndianRed),
+        ("Vert", Color.MediumSeaGreen),
+        ("Violet", Color.MediumOrchid),
+        ("Jaune", Color.Gold),
+        ("Blanc", Color.White)
+    };
 
     // Used for thrown knife model
     private static Dictionary<ushort, string> KnifePaths { get; } = new()
@@ -104,6 +132,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     public void OnConfigParsed(PluginConfig config)
     {
         Config = config;
+        Config.KnifeAmountsByFlag ??= new();
         if (config.Version != Config.Version)
         {
             Logger.LogWarning("Configuration version mismatch (Expected: {0} | Current: {1})", Config.Version, config.Version);
@@ -124,18 +153,25 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     public override void Load(bool hotReload)
     {
         base.Load(hotReload);
+        EnsureKitsuneMenuConfigFiles();
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        RegisterListener<Listeners.OnEntityTakeDamagePre>(OnEntityTakeDamage);
+        KitsuneMenu.KitsuneMenu.Init();
+        AddCommand("css_tk", "Ouvre le menu couleur de trail du couteau", (player, info) =>
+        {
+            if (player == null || !player.IsValid || player.IsBot || player.IsHLTV)
+                return;
 
-        VirtualFunctions.CBaseEntity_TakeDamageOldFunc.Hook(OnTakeDamage, HookMode.Pre);
+            KitsuneMenu.KitsuneMenu.ShowMenu(player, BuildTrailMenu(player));
+        });
 
         if (hotReload)
         {
-            if (Config.KnifeAmount == -1) return;
-
             foreach (var player in Utilities.GetPlayers().Where(p => !p.IsBot && !p.IsHLTV))
             {
-                _knivesAvailable[player.Slot] = Config.KnifeAmount;
+                _knivesAvailable[player.Slot] = GetKnifeAmountForPlayer(player);
                 _playerHasPerms[player.Slot] = PlayerHasPerm(player, Config.KnifeFlags);
+                EnsureTrailColor(player);
             }
         }
     }
@@ -144,13 +180,12 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     {
         base.Unload(hotReload);
         RemoveListener<Listeners.OnMapStart>(OnMapStart);
-
-        VirtualFunctions.CBaseEntity_TakeDamageOldFunc.Unhook(OnTakeDamage, HookMode.Pre);
+        RemoveListener<Listeners.OnEntityTakeDamagePre>(OnEntityTakeDamage);
+        KitsuneMenu.KitsuneMenu.Cleanup();
     }
 
-    private HookResult OnTakeDamage(DynamicHook hook)
+    private HookResult OnEntityTakeDamage(CBaseEntity entity, CTakeDamageInfo damageInfo)
     {
-        var entity = hook.GetParam<CEntityInstance>(0);
         if (entity == null || !entity.IsValid || !entity.DesignerName.Equals("player"))
             return HookResult.Continue;
 
@@ -162,9 +197,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         if (player == null || !player.IsValid)
             return HookResult.Continue;
 
-        var damageInfo = hook.GetParam<CTakeDamageInfo>(1);
-
-        var thrownKnife = damageInfo.Inflictor.Value;
+        var thrownKnife = damageInfo.Inflictor.Value?.As<CPhysicsPropOverride>();
 
         if (thrownKnife == null || !thrownKnife.IsValid || !thrownKnife.DesignerName.Equals("prop_physics_override"))
             return HookResult.Continue;
@@ -194,11 +227,70 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         damageInfo.Attacker.Raw = attacker.EntityHandle;
         damageInfo.Ability.Raw = (uint)activeWeapon;
         damageInfo.BitsDamageType = DamageTypes_t.DMG_SLASH;
-        damageInfo.Damage = Config.KnifeDamage;
+        var hitGroup = damageInfo.HitGroupId;
+        if (hitGroup == HitGroup_t.HITGROUP_INVALID)
+        {
+            var infoHitGroup = damageInfo.GetHitGroup();
+            if (infoHitGroup != HitGroup_t.HITGROUP_INVALID)
+            {
+                hitGroup = infoHitGroup;
+            }
+        }
+        if (hitGroup == HitGroup_t.HITGROUP_INVALID && pawn.LastHitGroup != HitGroup_t.HITGROUP_INVALID)
+        {
+            hitGroup = pawn.LastHitGroup;
+        }
+
+        // Heuristic head detection using impact point relative to player bbox
+        var impactPoint = GetImpactPoint(damageInfo, thrownKnife, pawn);
+        var collision = pawn.Collision;
+        var mins = collision?.Mins ?? new CounterStrikeSharp.API.Modules.Utils.Vector(0, 0, 0);
+        var maxs = collision?.Maxs ?? new CounterStrikeSharp.API.Modules.Utils.Vector(0, 0, 72);
+        var origin = pawn.AbsOrigin ?? impactPoint;
+
+        float height = maxs.Z - mins.Z;
+        if (height < 1.0f) height = 72.0f;
+
+        var localZ = impactPoint.Z - origin.Z;
+        float fracZ = (localZ - mins.Z) / height;
+        if (float.IsNaN(fracZ) || float.IsInfinity(fracZ))
+            fracZ = 0.0f;
+
+        bool heurHead = fracZ >= 0.8f;
+
+        if (hitGroup == HitGroup_t.HITGROUP_INVALID)
+        {
+            hitGroup = heurHead ? HitGroup_t.HITGROUP_HEAD : HitGroup_t.HITGROUP_CHEST;
+        }
+        else if (hitGroup != HitGroup_t.HITGROUP_HEAD && heurHead)
+        {
+            hitGroup = HitGroup_t.HITGROUP_HEAD;
+        }
+
+        var isHead = hitGroup == HitGroup_t.HITGROUP_HEAD;
+        damageInfo.HitGroupId = hitGroup;
+        if (isHead)
+        {
+            damageInfo.BitsDamageType |= DamageTypes_t.DMG_HEADSHOT;
+        }
+
+        damageInfo.Damage = isHead
+            ? Config.KnifeHeadshotDamage
+            : Config.KnifeDamage;
+
+        if (Config.DebugHits && attacker.IsValid)
+        {
+            var attackerController = attacker.OriginalController?.Get();
+            if (attackerController != null && attackerController.IsValid)
+            {
+                var hitText = hitGroup == HitGroup_t.HITGROUP_HEAD ? "tête" : "corps";
+                attackerController.PrintToChat($"[ThrowingKnives] Hit: {hitText} (dmg {damageInfo.Damage:F1})");
+            }
+        }
 
         thrownKnife.AcceptInput("Kill");
 
-        return HookResult.Continue;
+        return HookResult.Changed;
     }
 
     public void OnMapStart(string map) { }
@@ -217,11 +309,13 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
             if (!ShouldUpdateTrail(knifePos, oldpos)) continue;
 
             var owner = knife.OwnerEntity.Value?.As<CCSPlayerPawn>();
+            var ownerController = owner?.OriginalController?.Get();
 
             if (owner == null || !owner.IsValid)
                 continue;
 
-            CreateTrail(knifePos, oldpos, owner.TeamNum == 3 ? Color.Blue : Color.Red, lifetime: Config.KnifeTrailTime);
+            var trailColor = GetTrailColor(ownerController, owner);
+            CreateTrail(knifePos, oldpos, trailColor, lifetime: Config.KnifeTrailTime);
             _knivesOldPos[knife.Index] = knifePos;
         }
     }
@@ -247,6 +341,8 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) return HookResult.Continue;
 
         _playerHasPerms[player.Slot] = PlayerHasPerm(player, Config.KnifeFlags);
+        _knivesAvailable[player.Slot] = GetKnifeAmountForPlayer(player);
+        EnsureTrailColor(player);
         return HookResult.Continue;
     }
 
@@ -255,8 +351,6 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     {
         _knivesOldPos.Clear();
         _knivesThrown.Clear();
-
-        if (Config.KnifeAmount == -1) return HookResult.Continue;
 
         for (int i = 0; i < 65; i++)
         {
@@ -267,7 +361,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
                 player.Connected != PlayerConnectedState.PlayerConnected ||
                 player.IsBot || player.IsHLTV) continue;
 
-            _knivesAvailable[player.Slot] = Config.KnifeAmount;
+            _knivesAvailable[player.Slot] = GetKnifeAmountForPlayer(player);
         }
         return HookResult.Continue;
     }
@@ -277,9 +371,17 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         var pawn = player.PlayerPawn.Value;
 
         if (pawn == null) return;
-        if (Config.KnifeAmount != -1)
+        var playerKnifeLimit = GetKnifeAmountForPlayer(player);
+
+        if (playerKnifeLimit != -1)
         {
-            if (!_knivesAvailable.ContainsKey(player.Slot) || _knivesAvailable[player.Slot] == 0)
+            if (!_knivesAvailable.TryGetValue(player.Slot, out var knivesLeft))
+            {
+                knivesLeft = playerKnifeLimit;
+                _knivesAvailable[player.Slot] = knivesLeft;
+            }
+
+            if (knivesLeft == 0)
             {
                 return;
             }
@@ -316,6 +418,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         entity.DispatchSpawn();
 
         entity.Elasticity = Config.KnifeElasticity;
+        entity.GravityScale = Config.KnifeGravity;
         entity.OwnerEntity.Raw = player.PlayerPawn.Raw;
 
         entity.Collision.CollisionGroup = (byte)CollisionGroup.COLLISION_GROUP_DEFAULT;
@@ -366,12 +469,13 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
             }
 
             float cdLeft = Config.KnifeCooldown - (float)(DateTime.UtcNow - lastTime).TotalSeconds;
-            int knivesLeft = Config.KnifeAmount == -1 ? -1 : (_knivesAvailable.TryGetValue(slot, out var value) ? value : 0);
-            string knivesText = Config.KnifeAmount == -1 ? "∞" : knivesLeft.ToString();
+            int playerLimit = GetKnifeAmountForPlayer(player);
+            int knivesLeft = playerLimit == -1 ? -1 : (_knivesAvailable.TryGetValue(slot, out var value) ? value : playerLimit);
+            string knivesText = playerLimit == -1 ? "inf" : knivesLeft.ToString();
 
             if (cdLeft <= 0)
             {
-                player.PrintToCenterAlert($"Couteau prêt | Restants: {knivesText}");
+                player.PrintToCenterAlert($"Couteau pret | Restants: {knivesText}");
                 _playerCooldownTimers[slot]?.Kill();
                 return;
             }
@@ -379,7 +483,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
             player.PrintToCenterAlert($"Recharge: {cdLeft:F1}s | Restants: {knivesText}");
         }, TimerFlags.REPEAT);
 
-        if (Config.KnifeAmount == -1) return;
+        if (playerKnifeLimit == -1) return;
 
         _knivesAvailable[player.Slot] -= 1;
     }
@@ -417,6 +521,131 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         return (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    private void EnsureKitsuneMenuConfigFiles()
+    {
+        try
+        {
+            var assemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "";
+            if (string.IsNullOrEmpty(assemblyDir))
+                return;
+
+            var sharedDir = Path.Combine(Server.GameDirectory, "csgo", "addons", "counterstrikesharp", "shared", "KitsuneMenu");
+            var mappings = new (string Source, string Target)[]
+            {
+                ("menu_config.jsonc", "kitsune_menu_config.jsonc"),
+                ("kitsune_menu_config.jsonc", "kitsune_menu_config.jsonc"),
+                ("menu_translations.jsonc", "kitsune_menu_translations.jsonc"),
+                ("kitsune_menu_translations.jsonc", "kitsune_menu_translations.jsonc"),
+            };
+
+            foreach (var (sourceName, targetName) in mappings)
+            {
+                var sourcePath = Path.Combine(sharedDir, sourceName);
+                var targetPath = Path.Combine(assemblyDir, targetName);
+
+                if (File.Exists(sourcePath))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                    File.Copy(sourcePath, targetPath, overwrite: true);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning($"KitsuneMenu config copy failed: {ex.Message}");
+        }
+    }
+
+    private static bool IsValidVector(CounterStrikeSharp.API.Modules.Utils.Vector v)
+    {
+        return !(float.IsNaN(v.X) || float.IsNaN(v.Y) || float.IsNaN(v.Z) ||
+                 float.IsInfinity(v.X) || float.IsInfinity(v.Y) || float.IsInfinity(v.Z)) &&
+               (Math.Abs(v.X) > 0.01f || Math.Abs(v.Y) > 0.01f || Math.Abs(v.Z) > 0.01f);
+    }
+
+    private CounterStrikeSharp.API.Modules.Utils.Vector GetImpactPoint(CTakeDamageInfo info, CPhysicsPropOverride? knife, CCSPlayerPawn pawn)
+    {
+        if (IsValidVector(info.DamagePosition))
+            return info.DamagePosition;
+
+        if (knife != null && knife.IsValid && knife.AbsOrigin != null)
+            return (CounterStrikeSharp.API.Modules.Utils.Vector)knife.AbsOrigin;
+
+        if (pawn.AbsOrigin != null)
+            return pawn.AbsOrigin;
+
+        return new CounterStrikeSharp.API.Modules.Utils.Vector(0, 0, 0);
+    }
+
+    private void EnsureTrailColor(CCSPlayerController player)
+    {
+        if (_playerTrailColors.ContainsKey(player.Slot))
+            return;
+
+        _playerTrailColors[player.Slot] = GetDefaultTrailColor(player.TeamNum);
+    }
+
+    private Color GetTrailColor(CCSPlayerController? player, CCSPlayerPawn? pawn)
+    {
+        if (player != null && _playerTrailColors.TryGetValue(player.Slot, out var color))
+            return color;
+
+        var teamNum = pawn?.TeamNum ?? player?.TeamNum ?? 2;
+        var fallback = GetDefaultTrailColor(teamNum);
+
+        if (player != null)
+            _playerTrailColors[player.Slot] = fallback;
+
+        return fallback;
+    }
+
+    private Color GetDefaultTrailColor(byte teamNum)
+    {
+        return teamNum == 3 ? Color.Blue : Color.Red;
+    }
+
+    private IMenu BuildTrailMenu(CCSPlayerController player)
+    {
+        var defaultName = TrailPalette.First().Name;
+        if (_playerTrailColors.TryGetValue(player.Slot, out var current))
+        {
+            var found = TrailPalette.FirstOrDefault(p => p.Color.ToArgb() == current.ToArgb());
+            if (!string.IsNullOrEmpty(found.Name))
+                defaultName = found.Name;
+        }
+        else
+        {
+            EnsureTrailColor(player);
+        }
+
+        var menu = KitsuneMenu.KitsuneMenu.Create("Couleur du trail")
+            .AddChoice("Couleur", TrailPalette.Select(p => p.Name).ToArray(), defaultName, (p, choice) =>
+            {
+                var selected = TrailPalette.FirstOrDefault(c => c.Name.Equals(choice, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(selected.Name))
+                {
+                    _playerTrailColors[p.Slot] = selected.Color;
+                    p.PrintToChat($"[ThrowingKnives] Trail: {selected.Name}");
+                }
+            })
+            .Build();
+
+        return menu;
+    }
+
+    private int GetKnifeAmountForPlayer(CCSPlayerController player)
+    {
+        var matches = Config.KnifeAmountsByFlag
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key) &&
+                          (AdminManager.PlayerHasPermissions(player, kvp.Key) || AdminManager.PlayerInGroup(player, kvp.Key)))
+            .Select(kvp => kvp.Value);
+
+        if (matches.Any())
+            return matches.Max();
+
+        return Config.KnifeAmount;
+    }
+
     public static bool PlayerHasPerm(CCSPlayerController player, List<string> flags)
     {
         bool access = false;
@@ -437,5 +666,64 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
             }
         }
         return access;
+    }
+}
+
+// Allows reading integers or numeric strings (and "inf"/"-1") in KnifeAmountsByFlag without breaking config parsing.
+public class StringIntDictionaryConverter : JsonConverter<Dictionary<string, int>>
+{
+    public override Dictionary<string, int> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException();
+
+        var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+                break;
+
+            if (reader.TokenType != JsonTokenType.PropertyName)
+                throw new JsonException();
+
+            var key = reader.GetString() ?? string.Empty;
+            if (!reader.Read())
+                throw new JsonException();
+
+            int value;
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.Number when reader.TryGetInt32(out value):
+                    dict[key] = value;
+                    break;
+                case JsonTokenType.String:
+                    var strVal = reader.GetString();
+                    if (string.Equals(strVal, "inf", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dict[key] = -1;
+                    }
+                    else if (int.TryParse(strVal, out value))
+                    {
+                        dict[key] = value;
+                    }
+                    break;
+                default:
+                    reader.Skip();
+                    break;
+            }
+        }
+
+        return dict;
+    }
+
+    public override void Write(Utf8JsonWriter writer, Dictionary<string, int> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        foreach (var kvp in value)
+        {
+            writer.WriteNumber(kvp.Key, kvp.Value);
+        }
+        writer.WriteEndObject();
     }
 }

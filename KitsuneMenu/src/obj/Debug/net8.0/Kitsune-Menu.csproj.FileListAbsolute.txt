@@ -1,0 +1,13 @@
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\bin\Debug\net8.0\Kitsune-Menu.deps.json
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\bin\Debug\net8.0\Kitsune-Menu.dll
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\bin\Debug\net8.0\Kitsune-Menu.pdb
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.csproj.AssemblyReference.cache
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.AssemblyInfoInputs.cache
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.AssemblyInfo.cs
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.csproj.CoreCompileInputs.cache
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.sourcelink.json
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.dll
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\refint\Kitsune-Menu.dll
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\Kitsune-Menu.pdb
+C:\Users\micka\Documents\GitHub\ThrowingKnives\KitsuneMenu\src\obj\Debug\net8.0\ref\Kitsune-Menu.dll
