@@ -92,6 +92,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     // Used for trails
     private Dictionary<uint, Vector3> _knivesOldPos = new();
     private readonly Dictionary<int, Color> _playerTrailColors = new();
+    private bool _isFreezeTime;
     private static readonly (string Name, Color Color)[] TrailPalette =
     {
         ("Bleu", Color.CornflowerBlue),
@@ -323,6 +324,9 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     [ListenerHandler<Listeners.OnPlayerButtonsChanged>]
     public void OnPlayerButtonsChanged(CCSPlayerController player, PlayerButtons pressed, PlayerButtons released)
     {
+        if (player == null || !player.IsValid || IsFreezeTime())
+            return;
+
         CBasePlayerWeapon? activeWeapon;
         if (pressed.HasFlag(PlayerButtons.Attack) &&
             _playerHasPerms.ContainsKey(player.Slot) && _playerHasPerms[player.Slot] &&
@@ -349,6 +353,7 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo @info)
     {
+        _isFreezeTime = true;
         _knivesOldPos.Clear();
         _knivesThrown.Clear();
 
@@ -363,6 +368,20 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
             _knivesAvailable[player.Slot] = GetKnifeAmountForPlayer(player);
         }
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnRoundFreezeEnd(EventRoundFreezeEnd @event, GameEventInfo @info)
+    {
+        _isFreezeTime = false;
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup @event, GameEventInfo @info)
+    {
+        _isFreezeTime = false;
         return HookResult.Continue;
     }
 
@@ -519,6 +538,23 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
         float dz = vector2.Z - vector1.Z;
 
         return (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private bool IsFreezeTime()
+    {
+        try
+        {
+            var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules")
+                .FirstOrDefault()?.GameRules;
+
+            if (gameRules != null)
+                return gameRules.FreezePeriod;
+        }
+        catch
+        {
+        }
+
+        return _isFreezeTime;
     }
 
     private void EnsureKitsuneMenuConfigFiles()
