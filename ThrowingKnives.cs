@@ -65,13 +65,13 @@ public class PluginConfig : BasePluginConfig
     public override int Version { get; set; } = 6;
 }
 
-[MinimumApiVersion(352)]
+[MinimumApiVersion(361)]
 public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 {
     public override string ModuleName => "Throwing Knives";
     public override string ModuleDescription => "Throwing Knives plugin for CS2";
     public override string ModuleAuthor => "Cruze";
-    public override string ModuleVersion => "1.0.6";
+    public override string ModuleVersion => "1.0.7";
 
     public required PluginConfig Config { get; set; } = new();
 
@@ -236,10 +236,6 @@ public class Plugin : BasePlugin, IPluginConfig<PluginConfig>
             {
                 hitGroup = infoHitGroup;
             }
-        }
-        if (hitGroup == HitGroup_t.HITGROUP_INVALID && pawn.LastHitGroup != HitGroup_t.HITGROUP_INVALID)
-        {
-            hitGroup = pawn.LastHitGroup;
         }
 
         // Heuristic head detection using impact point relative to player bbox
