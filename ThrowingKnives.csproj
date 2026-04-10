@@ -22,10 +22,4 @@
 			<IncludeAssets>compile; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
 	</ItemGroup>
-	<ItemGroup>
-		<Reference Include="KitsuneMenu">
-			<HintPath>KitsuneMenu\src\bin\Debug\net8.0\KitsuneMenu.dll</HintPath>
-			<Private>true</Private>
-		</Reference>
-	</ItemGroup>
 </Project>
